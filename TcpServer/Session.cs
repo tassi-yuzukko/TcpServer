@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -21,7 +22,7 @@ namespace TcpServer
 
         readonly CancellationToken cancellationToken;
 
-        readonly object streamLocker = new object();
+        readonly ConcurrentQueue<byte[]> concurrentQueue = new ConcurrentQueue<byte[]>();
 
         public Task SessionTask { get; private set; }
 
@@ -36,23 +37,22 @@ namespace TcpServer
 
             stream = client.GetStream();
 
-            this.messageExchanger.NotifyAction = Notify;
+            // クライアントに対してプッシュ通知するために、キューに入れて予約しておく
+            this.messageExchanger.NotifyAction = (data => concurrentQueue.Enqueue(data));
 
-            logger.LogInformation($"Session is created. <Address:{((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle:{client.Client.Handle}>");
+            logger.LogInformation($"Session is created. {GetSessionInfomation()}");
         }
 
         // クライアントからリクエストを受信してレスポンスを送信する
         public void StartConnectionProcedure()
         {
-            // 終了処理を予約しておく
+            // 終了処理を予約しておく+
+
             cancellationToken.Register(() =>
             {
-                lock (streamLocker)
-                {
-                    SessionTask?.Wait();
+                SessionTask?.Wait();
 
-                    stream.Dispose();
-                }
+                stream.Dispose();
             });
 
             SessionTask = Task.Run(() =>
@@ -61,40 +61,51 @@ namespace TcpServer
                 {
                     while (true)
                     {
-                        lock (streamLocker)
+                        // クライアントとの接続確認処理
+                        if (client.Client.Poll(1000, SelectMode.SelectRead) && (IsAvailable() == false))
                         {
-                            // クライアントとの接続確認処理
-                            if (client.Client.Poll(1000, SelectMode.SelectRead) && (IsAvailable() == false))
-                            {
-                                logger.LogInformation($"Session is disconnected. <Address:{((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle:{client.Client.Handle}>");
+                            logger.LogInformation($"Session is disconnected. {GetSessionInfomation()}");
 
+                            break;
+                        }
+
+                        // 上位からの終了処理
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            logger.LogInformation($"Session is canceled. {GetSessionInfomation()}");
+
+                            break;
+                        }
+
+                        // リクエスト受信処理
+                        if (IsAvailable())
+                        {
+                            // クライアントからリクエストを受信する
+                            var request = stream.ReadReceivedData();
+
+                            logger.LogInformation($"Request received. {GetSessionInfomation()} <Data:{BytesToString(request)}>");
+
+                            // リクエストを処理してレスポンスを作る
+                            var response = messageExchanger.Response(request);
+
+                            // クライアントにレスポンスを送信する
+                            stream.WriteSendingData(response);
+
+                            logger.LogInformation($"Response sent. {GetSessionInfomation()} <Data:{BytesToString(response)}>");
+                        }
+
+                        // クライアントに対してプッシュ通知する
+                        while (concurrentQueue.IsEmpty == false)
+                        {
+                            if (concurrentQueue.TryDequeue(out byte[] notifyData) == false)
+                            {
+                                // キューから取り出し失敗した場合は、いったんループ抜けて、次のループで再トライする
+                                logger.LogWarning($"TryDequeue failed. {GetSessionInfomation()}");
                                 break;
                             }
+                            stream.WriteSendingData(notifyData);
 
-                            // 上位からの終了処理
-                            if (cancellationToken.IsCancellationRequested)
-                            {
-                                logger.LogInformation($"Session is canceled. <Address:{((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle:{client.Client.Handle}>");
-
-                                break;
-                            }
-
-                            // リクエスト受信処理
-                            if (IsAvailable())
-                            {
-                                // クライアントからリクエストを受信する
-                                var request = stream.ReadReceivedData();
-
-                                logger.LogInformation($"Request received. <Address:{((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle:{client.Client.Handle}, Data:{BytesToString(request)}>");
-
-                                // リクエストを処理してレスポンスを作る
-                                var response = messageExchanger.Response(request);
-
-                                // クライアントにレスポンスを送信する
-                                stream.WriteSendingData(response);
-
-                                logger.LogInformation($"Response sent. <Address:{((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle:{client.Client.Handle}, Data:{BytesToString(response)}>");
-                            }
+                            logger.LogInformation($"Notify sent. {GetSessionInfomation()}");
                         }
 
                         Thread.Sleep(10);
@@ -108,39 +119,6 @@ namespace TcpServer
                     throw ex;
                 }
             });
-        }
-
-        // クライアントに対してプッシュ通知する
-        void Notify(byte[] data)
-        {
-            try
-            {
-                lock (streamLocker)
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        logger.LogWarning($"Notify is aborted because of cancellation requested. <Address:{((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle:{client.Client.Handle}>");
-                        return;
-                    }
-
-                    if (stream.CanWrite == false)
-                    {
-                        logger.LogWarning($"Notify is aborted because stream cannot write. <Address:{((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle:{client.Client.Handle}>");
-                        return;
-                    }
-
-                    stream.WriteSendingData(data);
-
-                    logger.LogInformation($"Notify is sent. <Address:{((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle:{client.Client.Handle}>");
-                }
-            }
-            catch (Exception ex)
-            {
-                // ログを出力するためにすべての例外をキャッチしてます
-                logger.LogError(ex, "");
-
-                throw ex;
-            }
         }
 
         bool IsAvailable()
@@ -158,6 +136,11 @@ namespace TcpServer
             }
 
             return sb.ToString();
+        }
+
+        string GetSessionInfomation()
+        {
+            return "<Address:{ ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString()}, Handle: { client.Client.Handle}>";
         }
     }
 }
