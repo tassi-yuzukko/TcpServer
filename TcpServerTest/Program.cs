@@ -12,6 +12,7 @@ namespace TcpServerTest
     {
         static void Main(string[] args)
         {
+            // ロガーファクトリーを追加
             LogManager.SetLoggerFactory(new LoggerFactory().AddConsole().AddDebug());
 
             // サーバが接続を待つエンドポイント

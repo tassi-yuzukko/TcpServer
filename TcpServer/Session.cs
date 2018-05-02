@@ -46,8 +46,7 @@ namespace TcpServer
         // クライアントからリクエストを受信してレスポンスを送信する
         public void StartConnectionProcedure()
         {
-            // 終了処理を予約しておく+
-
+            // 終了処理を予約しておく
             cancellationToken.Register(() =>
             {
                 SessionTask?.Wait();
