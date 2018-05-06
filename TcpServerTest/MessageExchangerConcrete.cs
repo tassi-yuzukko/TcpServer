@@ -14,15 +14,15 @@ namespace TcpServerTest
 
         public MessageExchangerConcrete()
         {
-            Task.Run(() =>
-            {
-                for (int i = 0; i < 10; i++)
-                {
-                    Thread.Sleep(1000);
+            //Task.Run(() =>
+            //{
+            //    for (int i = 0; i < 10; i++)
+            //    {
+            //        Thread.Sleep(1000);
 
-                    Notify(NotifyProc());
-                }
-            });
+            //        Notify(NotifyProc());
+            //    }
+            //});
         }
 
         override public byte[] Response(byte[] request)

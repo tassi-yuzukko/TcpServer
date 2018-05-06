@@ -22,9 +22,10 @@ namespace TcpServer
 
         readonly CancellationToken cancellationToken;
 
-        readonly ConcurrentQueue<byte[]> concurrentQueue = new ConcurrentQueue<byte[]>();
+        // 通知用のキュー
+        readonly ConcurrentQueue<byte[]> notificationQueue = new ConcurrentQueue<byte[]>();
 
-        public Task SessionTask { get; private set; }
+        Task sessionTask;
 
         public Session(
             TcpClient client,
@@ -37,8 +38,8 @@ namespace TcpServer
 
             stream = client.GetStream();
 
-            // クライアントに対してプッシュ通知するために、キューに入れて予約しておく
-            this.messageExchanger.NotifyAction = (data => concurrentQueue.Enqueue(data));
+            // クライアントに対してプッシュ通知する処理を登録
+            this.messageExchanger.Subscribe(data => notificationQueue.Enqueue(data));
 
             logger.LogInformation($"Session is created. {GetSessionInfomation()}");
         }
@@ -49,12 +50,12 @@ namespace TcpServer
             // 終了処理を予約しておく
             cancellationToken.Register(() =>
             {
-                SessionTask?.Wait();
+                sessionTask?.Wait();
 
                 stream.Dispose();
             });
 
-            SessionTask = Task.Run(() =>
+            sessionTask = Task.Run(() =>
             {
                 try
                 {
@@ -94,9 +95,9 @@ namespace TcpServer
                         }
 
                         // クライアントに対してプッシュ通知する
-                        while (concurrentQueue.IsEmpty == false)
+                        while (notificationQueue.IsEmpty == false)
                         {
-                            if (concurrentQueue.TryDequeue(out byte[] notifyData) == false)
+                            if (notificationQueue.TryDequeue(out byte[] notifyData) == false)
                             {
                                 // キューから取り出し失敗した場合は、いったんループ抜けて、次のループで再トライする
                                 logger.LogWarning($"TryDequeue failed. {GetSessionInfomation()}");
@@ -119,6 +120,10 @@ namespace TcpServer
                 }
             });
         }
+
+        public int SessionTaskId => sessionTask.Id;
+
+        public bool IsSessionTaskCompleted => sessionTask.IsCompleted;
 
         bool IsAvailable()
         {

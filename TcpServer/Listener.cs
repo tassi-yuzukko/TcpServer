@@ -80,16 +80,16 @@ namespace TcpServer
 
                             sessions.Add(session);
 
-                            logger.LogInformation($"Listener accepted and added new session. <new session task id:{session.SessionTask.Id}, session list size:{sessions.Count()}>");
+                            logger.LogInformation($"Listener accepted and added new session. <new session task id:{session.SessionTaskId}, session list size:{sessions.Count()}>");
                         }
 
                         // 終了済みのセッションを削除する
                         foreach (var session in sessions.ToArray())
                         {
-                            if (session.SessionTask.IsCompleted)
+                            if (session.IsSessionTaskCompleted)
                             {
                                 sessions.Remove(session);
-                                logger.LogInformation($"Session completed. <completed session task id:{session.SessionTask.Id},session list size:{sessions.Count()}>");
+                                logger.LogInformation($"Session completed. <completed session task id:{session.SessionTaskId},session list size:{sessions.Count()}>");
                             }
                         }
 

@@ -27,11 +27,11 @@ namespace TcpServer
 
         public void AddListener(
             IPEndPoint endpoint,
-            IMessageExchangerFactory requestResponserFactory)
+            IMessageExchangerFactory messageExchangerFactory)
         {
             var listener = new Listener(
                 endpoint,
-                requestResponserFactory,
+                messageExchangerFactory,
                 tokenSource.Token);
 
             listener.StartListening();
